@@ -20,7 +20,7 @@ from rest_framework.routers import DefaultRouter
 from backend import views
 
 router = DefaultRouter()
-#exemplo de registro de uma viewset para o modelo Cliente
+router.register(r'usuarios', views.UsuarioViewSet)
 router.register(r'clientes', views.ClienteViewSet)
 router.register(r'veiculos', views.VeiculoViewSet)
 router.register(r'pecas', views.PecaViewSet)

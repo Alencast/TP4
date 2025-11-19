@@ -10,9 +10,17 @@ class UsuarioAdmin(UserAdmin):
     list_filter = ('tipo', 'is_staff', 'is_superuser', 'is_active')
     search_fields = ('username', 'email', 'first_name', 'last_name', 'cpf')
     
+    # Campos para edição de usuário existente
     fieldsets = UserAdmin.fieldsets + (
         ('Informações Adicionais', {
             'fields': ('tipo', 'cpf', 'telefone', 'data_nascimento')
+        }),
+    )
+    
+    # Campos para criação de novo usuário
+    add_fieldsets = UserAdmin.add_fieldsets + (
+        ('Informações Adicionais', {
+            'fields': ('tipo', 'cpf', 'telefone', 'data_nascimento', 'email', 'first_name', 'last_name')
         }),
     )
     
@@ -63,6 +71,41 @@ class OrcamentoAdmin(admin.ModelAdmin):
     list_filter = ('status', 'data_criacao', 'data_validade')
     search_fields = ('veiculo__placa', 'mecanico_responsavel__username', 'descricao_problema')
     list_select_related = ('veiculo', 'mecanico_responsavel')
+    list_editable = ('status',)  # Permite editar status diretamente na lista
+    actions = ['aprovar_orcamentos']
+    
+    fieldsets = (
+        ('Veículo e Responsável', {
+            'fields': ('veiculo', 'mecanico_responsavel')
+        }),
+        ('Descrição e Prazos', {
+            'fields': ('descricao_problema', 'data_validade')
+        }),
+        ('Valores', {
+            'fields': ('valor_mao_obra', 'valor_pecas', 'valor_total', 'status', 'desconto_aplicado')
+        }),
+        ('Observações', {
+            'fields': ('observacoes',),
+            'classes': ('collapse',)
+        })
+    )
+    
+    readonly_fields = ('valor_total', 'data_criacao', 'desconto_aplicado')
+    
+    def aprovar_orcamentos(self, request, queryset):
+        """Action para aprovar múltiplos orçamentos"""
+        aprovados = 0
+        for orcamento in queryset:
+            sucesso, mensagem = orcamento.aprovar()
+            if sucesso:
+                aprovados += 1
+        
+        if aprovados:
+            self.message_user(request, f'{aprovados} orçamento(s) aprovado(s) com sucesso.')
+        else:
+            self.message_user(request, 'Nenhum orçamento pôde ser aprovado.')
+    
+    aprovar_orcamentos.short_description = "Aprovar orçamentos selecionados"
     
     fieldsets = (
         ('Veículo e Responsável', {

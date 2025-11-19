@@ -1,5 +1,7 @@
 from django.db import models
 from django.contrib.auth.models import AbstractUser
+from django.db.models.signals import post_save, pre_save
+from django.dispatch import receiver
 
 # Create your models here.
 
@@ -108,6 +110,48 @@ class Peca(models.Model):
     def __str__(self):
         return f"{self.codigo} - {self.nome}"
     
+    def verificar_disponibilidade(self, quantidade_desejada):
+        """
+        Verifica se há estoque suficiente e se a peça está disponível
+        """
+            
+        if self.status == 'esgotado':
+            return False, 'Peça está esgotada'
+            
+        if self.quantidade_estoque < quantidade_desejada:
+            return False, f'Estoque insuficiente. Disponível: {self.quantidade_estoque}, Solicitado: {quantidade_desejada}'
+            
+        return True, 'Peça tá disponível'
+        
+    def reduzir_estoque(self, quantidade):
+        """
+        Reduz a quantidade do estoque e atualiza status se necessário
+        """
+        if self.quantidade_estoque >= quantidade:
+            self.quantidade_estoque -= quantidade
+            
+            # Atualizar status baseado no estoque
+            if self.quantidade_estoque == 0:
+                self.status = 'esgotado'
+            elif self.status == 'esgotado' and self.quantidade_estoque > 0:
+                self.status = 'disponivel'
+                
+            self.save()
+            return True
+        return False
+        
+    def adicionar_estoque(self, quantidade):
+        """
+        Adiciona quantidade ao estoque e atualiza status se necessário
+        """
+        self.quantidade_estoque += quantidade
+        
+        # Se estava esgotado e agora tem estoque, marca como disponível
+        if self.status == 'esgotado' and self.quantidade_estoque > 0:
+            self.status = 'disponivel'
+            
+        self.save()
+    
     class Meta:
         verbose_name = 'Peça'
         verbose_name_plural = 'Peças'
@@ -131,9 +175,41 @@ class Orcamento(models.Model):
     valor_total = models.DecimalField(max_digits=10, decimal_places=2)
     status = models.CharField(max_length=15, choices=STATUS_CHOICES, default='pendente')
     observacoes = models.TextField(blank=True)
+    desconto_aplicado = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     
     def __str__(self):
         return f"Orçamento #{self.id} - {self.veiculo}"
+    
+    def save(self, *args, **kwargs):
+        """Calcular automaticamente valor_total"""
+        self.valor_total = self.valor_mao_obra + self.valor_pecas
+        super().save(*args, **kwargs)
+        
+    def aprovar(self):
+        """Política de aprovação"""
+        from django.utils import timezone
+        from datetime import timedelta
+        
+        hoje = timezone.now().date()
+        
+        # Verificar se expirado
+        if self.data_validade < hoje:
+            self.status = 'expirado'
+            self.save()
+            return False, 'Orçamento expirado'
+            
+        # Verificar se pendente
+        if self.status != 'pendente':
+            return False, 'Apenas orçamentos pendentes podem ser aprovados'
+            
+        # Aplicar desconto se mais de 30 dias
+        dias_desde_criacao = (hoje - self.data_criacao.date()).days
+        if dias_desde_criacao > 30:
+            self.desconto_aplicado = self.valor_total * 0.10
+            
+        self.status = 'aprovado'
+        self.save()
+        return True, 'Aprovado com sucesso'
     
     class Meta:
         verbose_name = 'Orçamento'
@@ -164,8 +240,36 @@ class OrdemServico(models.Model):
             raise ValidationError('Quilometragem deve ser um valor positivo.')
     
     def save(self, *args, **kwargs):
+        # Verificar regras antes de criar
+        if not self.pk:  # Nova ordem
+            if self.orcamento.status != 'aprovado':
+                raise ValueError('Ordem só pode ser criada para orçamento aprovado')
         self.full_clean()
         super().save(*args, **kwargs)
+        
+    def concluir(self):
+        """Concluir ordem de serviço"""
+        from django.utils import timezone
+        
+        if self.status != 'em_andamento':
+            return False, 'Apenas ordens em andamento podem ser concluídas'
+            
+        # Registrar conclusão
+        self.data_conclusao = timezone.now()
+        self.status = 'concluido'
+        
+        # Calcular valor final
+        valor_pecas_utilizadas = sum(
+            item.quantidade * item.preco_unitario_cobrado 
+            for item in self.itens_pecas.all()
+        )
+        
+        # Simular notificação
+        print(f"NOTIFICAÇÃO: Ordem #{self.id} concluída para {self.orcamento.veiculo}")
+        print(f"Valor final: R$ {self.orcamento.valor_mao_obra + valor_pecas_utilizadas}")
+        
+        self.save()
+        return True, 'Ordem concluída com sucesso'
     
     def __str__(self):
         return f"OS #{self.id} - {self.orcamento.veiculo}"
@@ -180,17 +284,76 @@ class ItemPeca(models.Model):
     peca = models.ForeignKey('Peca', on_delete=models.CASCADE, related_name='itens_utilizados')
     quantidade = models.IntegerField()
     preco_unitario_cobrado = models.DecimalField(max_digits=10, decimal_places=2)
+    estoque_reduzido = models.BooleanField(default=False, help_text='Indica se o estoque já foi reduzido')
     
     def clean(self):
         from django.core.exceptions import ValidationError
+        
+        # Validações básicas
         if self.quantidade <= 0:
             raise ValidationError('Quantidade deve ser maior que zero.')
         if self.preco_unitario_cobrado < 0:
             raise ValidationError('Preço unitário deve ser um valor positivo.')
+            
+        # Validações de estoque (apenas para novos itens)
+        if not self.pk:  # Novo item
+            disponivel, mensagem = self.peca.verificar_disponibilidade(self.quantidade)
+            if not disponivel:
+                raise ValidationError(f'Erro de estoque: {mensagem}')
     
     def save(self, *args, **kwargs):
+        # Verificar se é um novo item ou se a quantidade foi alterada
+        novo_item = self.pk is None
+        quantidade_alterada = False
+        quantidade_anterior = 0
+        
+        if not novo_item:
+            # Buscar quantidade anterior para comparar
+            item_anterior = ItemPeca.objects.get(pk=self.pk)
+            quantidade_anterior = item_anterior.quantidade
+            quantidade_alterada = quantidade_anterior != self.quantidade
+        
+        # Validar antes de salvar
         self.full_clean()
+        
+        # Salvar o item
         super().save(*args, **kwargs)
+        
+        # Gerenciar estoque apenas se confirmado o uso
+        if hasattr(self.ordem_servico, 'status') and self.ordem_servico.status == 'concluido':
+            self.confirmar_uso_estoque()
+            
+    def confirmar_uso_estoque(self):
+        """
+        Confirma o uso da peça e reduz do estoque (chamado quando OS é concluída)
+        """
+        if not self.estoque_reduzido:
+            sucesso = self.peca.reduzir_estoque(self.quantidade)
+            if sucesso:
+                self.estoque_reduzido = True
+                super().save(update_fields=['estoque_reduzido'])
+                return True
+            else:
+                from django.core.exceptions import ValidationError
+                raise ValidationError(f'Não foi possível reduzir estoque da peça {self.peca.codigo}')
+        return False
+        
+    def reverter_uso_estoque(self):
+        """
+        Reverte o uso da peça e adiciona de volta ao estoque
+        """
+        if self.estoque_reduzido:
+            self.peca.adicionar_estoque(self.quantidade)
+            self.estoque_reduzido = False
+            super().save(update_fields=['estoque_reduzido'])
+            
+    def delete(self, *args, **kwargs):
+        """
+        Ao deletar item, reverter estoque se já foi reduzido
+        """
+        if self.estoque_reduzido:
+            self.reverter_uso_estoque()
+        super().delete(*args, **kwargs)
     
     @property
     def valor_total(self):
@@ -204,3 +367,19 @@ class ItemPeca(models.Model):
         verbose_name_plural = 'Itens Peças'
         ordering = ['peca__nome']
         unique_together = ['ordem_servico', 'peca']
+
+# Signals para gerenciar estoque automaticamente
+
+@receiver(post_save, sender=OrdemServico)
+def gerenciar_estoque_ordem_servico(sender, instance, **kwargs):
+    """
+    Gerencia estoque quando status da Ordem de Serviço muda
+    """
+    if instance.status == 'concluido':
+        # Confirmar uso de todas as peças
+        for item in instance.itens_pecas.all():
+            item.confirmar_uso_estoque()
+    elif instance.status == 'cancelado':
+        # Reverter uso de peças se necessário
+        for item in instance.itens_pecas.all():
+            item.reverter_uso_estoque()
