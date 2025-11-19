@@ -1,6 +1,6 @@
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin
-from .models import Cliente, Veiculo, Usuario, Peca, Orcamento, OrdemServico, ItemPeca
+from .models import Usuario, Veiculo, Peca, Orcamento, OrdemServico, ItemPeca
 
 # Register your models here.
 
@@ -24,12 +24,6 @@ class UsuarioAdmin(UserAdmin):
         }),
     )
     
-@admin.register(Cliente)
-class ClienteAdmin(admin.ModelAdmin):
-    list_display = ('nome', 'email', 'telefone', 'data_cadastro')
-    search_fields = ('nome', 'email')
-    list_filter = ('data_cadastro',)
-
 @admin.register(Veiculo)
 class VeiculoAdmin(admin.ModelAdmin):
     list_display = ('placa', 'marca', 'modelo', 'ano', 'cor', 'cliente', 'data_cadastro')
@@ -71,7 +65,7 @@ class OrcamentoAdmin(admin.ModelAdmin):
     list_filter = ('status', 'data_criacao', 'data_validade')
     search_fields = ('veiculo__placa', 'mecanico_responsavel__username', 'descricao_problema')
     list_select_related = ('veiculo', 'mecanico_responsavel')
-    list_editable = ('status',)  # Permite editar status diretamente na lista
+    list_editable = ('status',)  # Permite editar status na lista
     actions = ['aprovar_orcamentos']
     
     fieldsets = (
@@ -93,7 +87,6 @@ class OrcamentoAdmin(admin.ModelAdmin):
     readonly_fields = ('valor_total', 'data_criacao', 'desconto_aplicado')
     
     def aprovar_orcamentos(self, request, queryset):
-        """Action para aprovar múltiplos orçamentos"""
         aprovados = 0
         for orcamento in queryset:
             sucesso, mensagem = orcamento.aprovar()

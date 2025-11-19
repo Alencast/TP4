@@ -21,7 +21,6 @@ from backend import views
 
 router = DefaultRouter()
 router.register(r'usuarios', views.UsuarioViewSet)
-router.register(r'clientes', views.ClienteViewSet)
 router.register(r'veiculos', views.VeiculoViewSet)
 router.register(r'pecas', views.PecaViewSet)
 router.register(r'orcamentos', views.OrcamentoViewSet)
