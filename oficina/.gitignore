@@ -1,0 +1,22 @@
+# Database
+*.sqlite3
+*.db
+
+# Django
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.env
+media/
+staticfiles/
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
